@@ -20,17 +20,20 @@ import (
 )
 
 func TestRunCmdTransportsPaperclipContextToContainerConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	badHome := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(badHome, []byte("stored credentials must not be read"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", badHome)
+	t.Setenv("ONECLI_API_KEY", "stored-management-key-must-not-be-sent")
 	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "binding-proof")
 	t.Setenv("PAPERCLIP_RUN_ID", "run-proof")
 	t.Setenv("PAPERCLIP_AGENT_ID", "agent-proof")
 	t.Setenv("PAPERCLIP_COMPANY_ID", "company-proof")
 
-	got := make(http.Header)
+	var requests []http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/container-config" {
-			got = r.Header.Clone()
-		}
+		requests = append(requests, r.Header.Clone())
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"env":{},"caCertificate":"","caCertificateContainerPath":""}`))
 	}))
@@ -43,6 +46,9 @@ func TestRunCmdTransportsPaperclipContextToContainerConfig(t *testing.T) {
 	if err := cmd.Run(out); err != nil {
 		t.Fatal(err)
 	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want health probe plus container config", len(requests))
+	}
 
 	want := map[string]string{
 		"X-Paperclip-OneCLI-Run-Binding": "binding-proof",
@@ -51,8 +57,66 @@ func TestRunCmdTransportsPaperclipContextToContainerConfig(t *testing.T) {
 		"X-Paperclip-Company-Id":         "company-proof",
 	}
 	for name, value := range want {
-		if got.Get(name) != value {
-			t.Errorf("%s = %q, want %q", name, got.Get(name), value)
+		for i, got := range requests {
+			if got.Get(name) != value {
+				t.Errorf("request %d: %s = %q, want %q", i, name, got.Get(name), value)
+			}
+		}
+	}
+	for i, got := range requests {
+		if got.Get("Authorization") != "" {
+			t.Errorf("request %d sent management Authorization header", i)
+		}
+	}
+}
+
+func TestRunCmdRejectsPartialPaperclipContextBeforeNetwork(t *testing.T) {
+	for _, name := range []string{"PAPERCLIP_ONECLI_RUNTIME_BINDING", "PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("PAPERCLIP_RUN_ID", "partial")
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+	}))
+	defer srv.Close()
+	t.Setenv("ONECLI_API_HOST", srv.URL)
+
+	var stdout bytes.Buffer
+	err := (&RunCmd{NoCA: true, DryRun: true, Args: []string{"true"}}).Run(output.NewWithWriters(&stdout, &stdout))
+	if err == nil || !strings.Contains(err.Error(), "incomplete Paperclip run context") {
+		t.Fatalf("error = %v, want incomplete context", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want zero", requests)
+	}
+}
+
+func TestRunCmdOperatorModeRetainsStoredKeyAuthentication(t *testing.T) {
+	for _, name := range []string{"PAPERCLIP_ONECLI_RUNTIME_BINDING", "PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("ONECLI_API_KEY", "operator-key")
+	var authorizations []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"env":{},"caCertificate":"","caCertificateContainerPath":""}`))
+	}))
+	defer srv.Close()
+	t.Setenv("ONECLI_API_HOST", srv.URL)
+
+	var stdout bytes.Buffer
+	cmd := RunCmd{Agent: "operator-agent", NoCA: true, DryRun: true, Args: []string{"true"}}
+	if err := cmd.Run(output.NewWithWriters(&stdout, &stdout)); err != nil {
+		t.Fatal(err)
+	}
+	if len(authorizations) != 2 {
+		t.Fatalf("requests = %d, want health probe plus container config", len(authorizations))
+	}
+	for i, got := range authorizations {
+		if got != "Bearer operator-key" {
+			t.Errorf("request %d Authorization = %q", i, got)
 		}
 	}
 }

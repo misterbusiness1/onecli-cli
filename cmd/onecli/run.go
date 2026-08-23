@@ -70,7 +70,7 @@ func (c *RunCmd) Run(out *output.Writer) error {
 	}
 
 	// Fetch gateway configuration from the API.
-	client, err := newClient()
+	client, err := newRunClient()
 	if err != nil {
 		return err
 	}

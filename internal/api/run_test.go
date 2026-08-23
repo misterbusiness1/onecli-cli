@@ -21,7 +21,11 @@ func TestGetContainerConfigTransportsPaperclipRunContext(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := newWithPrefix(srv.URL, "", "/v1")
+	headers, bound, err := PaperclipRunHeadersFromEnv()
+	if err != nil || !bound {
+		t.Fatalf("PaperclipRunHeadersFromEnv() = bound %v, err %v", bound, err)
+	}
+	client := NewPaperclipRun(srv.URL, headers)
 	if _, err := client.GetContainerConfig(context.Background(), "occ-plugin-engineer"); err != nil {
 		t.Fatal(err)
 	}
@@ -52,13 +56,44 @@ func TestGetContainerConfigOmitsPaperclipHeadersWhenUnbound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := newWithPrefix(srv.URL, "", "/v1")
-	if _, err := client.GetContainerConfig(context.Background(), ""); err != nil {
+	headers, bound, err := PaperclipRunHeadersFromEnv()
+	if err != nil {
 		t.Fatal(err)
 	}
+	if bound || headers != nil {
+		t.Fatalf("unbound context = headers %v, bound %v", headers, bound)
+	}
+	if len(got) != 0 {
+		t.Fatalf("unexpected request before client construction: %v", got)
+	}
+}
+
+func TestPaperclipRunHeadersRejectPartialContext(t *testing.T) {
 	for _, item := range paperclipRunHeaderEnv {
-		if got.Get(item.header) != "" {
-			t.Errorf("unexpected %s header", item.header)
-		}
+		t.Setenv(item.env, "")
+	}
+	t.Setenv("PAPERCLIP_RUN_ID", "run-only")
+	if _, _, err := PaperclipRunHeadersFromEnv(); err == nil {
+		t.Fatal("expected partial Paperclip context to fail")
+	}
+}
+
+func TestPaperclipRunClientRejectsManagementEndpointBeforeNetwork(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+	}))
+	defer srv.Close()
+	client := NewPaperclipRun(srv.URL, http.Header{
+		"X-Paperclip-Onecli-Run-Binding": {"binding"},
+		"X-Paperclip-Run-Id":             {"run"},
+		"X-Paperclip-Agent-Id":           {"agent"},
+		"X-Paperclip-Company-Id":         {"company"},
+	})
+	if _, err := client.ListProjects(context.Background()); err == nil {
+		t.Fatal("expected management endpoint rejection")
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want zero", requests)
 	}
 }

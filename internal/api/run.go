@@ -19,14 +19,25 @@ var paperclipRunHeaderEnv = []struct {
 	{"X-Paperclip-Company-Id", "PAPERCLIP_COMPANY_ID"},
 }
 
-func paperclipRunHeaders() http.Header {
+// PaperclipRunHeadersFromEnv returns an immutable snapshot of a complete
+// Paperclip run context. With no context it returns (nil, false, nil), allowing
+// explicit operator mode. Any partial context is rejected before networking.
+func PaperclipRunHeadersFromEnv() (http.Header, bool, error) {
 	headers := make(http.Header)
+	present := 0
 	for _, item := range paperclipRunHeaderEnv {
 		if value := strings.TrimSpace(os.Getenv(item.env)); value != "" {
 			headers.Set(item.header, value)
+			present++
 		}
 	}
-	return headers
+	if present == 0 {
+		return nil, false, nil
+	}
+	if present != len(paperclipRunHeaderEnv) {
+		return nil, false, fmt.Errorf("incomplete Paperclip run context: all PAPERCLIP_ONECLI_RUNTIME_BINDING, PAPERCLIP_RUN_ID, PAPERCLIP_AGENT_ID, and PAPERCLIP_COMPANY_ID values are required")
+	}
+	return headers, true, nil
 }
 
 // ContainerConfig is the response from GET /v1/container-config.
@@ -48,7 +59,7 @@ func (c *Client) GetContainerConfig(ctx context.Context, agentIdentifier string)
 		path += "?" + q.Encode()
 	}
 	var cfg ContainerConfig
-	if err := c.doWithHeaders(ctx, http.MethodGet, path, nil, &cfg, paperclipRunHeaders()); err != nil {
+	if err := c.do(ctx, http.MethodGet, path, nil, &cfg); err != nil {
 		return nil, fmt.Errorf("getting container config: %w", err)
 	}
 	return &cfg, nil

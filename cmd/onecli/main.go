@@ -158,6 +158,21 @@ func newClient() (*api.Client, error) {
 	return api.New(config.APIHost(), key), nil
 }
 
+// newRunClient selects capability-only Paperclip run authentication when the
+// complete server-minted context is present. Crucially, that path never calls
+// CredentialsDir or Store.Load. With no Paperclip context this is an explicit
+// operator invocation and retains the stored management-key behavior.
+func newRunClient() (*api.Client, error) {
+	headers, bound, err := api.PaperclipRunHeadersFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if bound {
+		return api.NewPaperclipRun(config.APIHost(), headers), nil
+	}
+	return newClient()
+}
+
 // newContext returns a background context for API calls.
 func newContext() context.Context {
 	return context.Background()
