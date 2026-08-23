@@ -32,8 +32,10 @@ func TestRunCmdTransportsPaperclipContextToContainerConfig(t *testing.T) {
 	t.Setenv("PAPERCLIP_COMPANY_ID", "company-proof")
 
 	var requests []http.Header
+	var requestPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests = append(requests, r.Header.Clone())
+		requestPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"env":{},"caCertificate":"","caCertificateContainerPath":""}`))
 	}))
@@ -46,8 +48,11 @@ func TestRunCmdTransportsPaperclipContextToContainerConfig(t *testing.T) {
 	if err := cmd.Run(out); err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 2 {
-		t.Fatalf("requests = %d, want health probe plus container config", len(requests))
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want one container-config request", len(requests))
+	}
+	if requestPath != "/v1/container-config" {
+		t.Fatalf("request path = %q, want /v1/container-config", requestPath)
 	}
 
 	want := map[string]string{
