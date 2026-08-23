@@ -57,6 +57,7 @@ func NewPaperclipRun(baseURL string, headers http.Header) *Client {
 		defaultHeaders: headers.Clone(),
 		runOnly:        true,
 		httpClient:     buildHTTPClient(),
+		prefix:         "/v1",
 	}
 }
 

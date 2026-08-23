@@ -13,8 +13,13 @@ func TestGetContainerConfigTransportsPaperclipRunContext(t *testing.T) {
 	t.Setenv("PAPERCLIP_AGENT_ID", "agent-proof")
 	t.Setenv("PAPERCLIP_COMPANY_ID", "company-proof")
 
+	requests := 0
 	got := make(http.Header)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/v1/container-config" {
+			t.Errorf("request path = %q, want /v1/container-config", r.URL.Path)
+		}
 		got = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"env":{},"caCertificate":"","caCertificateContainerPath":""}`))
@@ -28,6 +33,9 @@ func TestGetContainerConfigTransportsPaperclipRunContext(t *testing.T) {
 	client := NewPaperclipRun(srv.URL, headers)
 	if _, err := client.GetContainerConfig(context.Background(), "occ-plugin-engineer"); err != nil {
 		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want exactly one capability-bearing request", requests)
 	}
 
 	want := map[string]string{
