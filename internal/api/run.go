@@ -5,7 +5,29 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 )
+
+var paperclipRunHeaderEnv = []struct {
+	header string
+	env    string
+}{
+	{"X-Paperclip-OneCLI-Run-Binding", "PAPERCLIP_ONECLI_RUNTIME_BINDING"},
+	{"X-Paperclip-Run-Id", "PAPERCLIP_RUN_ID"},
+	{"X-Paperclip-Agent-Id", "PAPERCLIP_AGENT_ID"},
+	{"X-Paperclip-Company-Id", "PAPERCLIP_COMPANY_ID"},
+}
+
+func paperclipRunHeaders() http.Header {
+	headers := make(http.Header)
+	for _, item := range paperclipRunHeaderEnv {
+		if value := strings.TrimSpace(os.Getenv(item.env)); value != "" {
+			headers.Set(item.header, value)
+		}
+	}
+	return headers
+}
 
 // ContainerConfig is the response from GET /v1/container-config.
 // The server controls all env var names, values, and paths.
@@ -26,7 +48,7 @@ func (c *Client) GetContainerConfig(ctx context.Context, agentIdentifier string)
 		path += "?" + q.Encode()
 	}
 	var cfg ContainerConfig
-	if err := c.do(ctx, http.MethodGet, path, nil, &cfg); err != nil {
+	if err := c.doWithHeaders(ctx, http.MethodGet, path, nil, &cfg, paperclipRunHeaders()); err != nil {
 		return nil, fmt.Errorf("getting container config: %w", err)
 	}
 	return &cfg, nil

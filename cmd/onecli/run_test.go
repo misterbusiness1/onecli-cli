@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,44 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestRunCmdTransportsPaperclipContextToContainerConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "binding-proof")
+	t.Setenv("PAPERCLIP_RUN_ID", "run-proof")
+	t.Setenv("PAPERCLIP_AGENT_ID", "agent-proof")
+	t.Setenv("PAPERCLIP_COMPANY_ID", "company-proof")
+
+	got := make(http.Header)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/container-config" {
+			got = r.Header.Clone()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"env":{},"caCertificate":"","caCertificateContainerPath":""}`))
+	}))
+	defer srv.Close()
+	t.Setenv("ONECLI_API_HOST", srv.URL)
+
+	var stdout bytes.Buffer
+	out := output.NewWithWriters(&stdout, &stdout)
+	cmd := RunCmd{Agent: "occ-plugin-engineer", NoCA: true, DryRun: true, Args: []string{"true"}}
+	if err := cmd.Run(out); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		"X-Paperclip-OneCLI-Run-Binding": "binding-proof",
+		"X-Paperclip-Run-Id":             "run-proof",
+		"X-Paperclip-Agent-Id":           "agent-proof",
+		"X-Paperclip-Company-Id":         "company-proof",
+	}
+	for name, value := range want {
+		if got.Get(name) != value {
+			t.Errorf("%s = %q, want %q", name, got.Get(name), value)
+		}
+	}
+}
 
 func TestFindProxyURL(t *testing.T) {
 	tests := []struct {

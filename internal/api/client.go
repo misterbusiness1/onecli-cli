@@ -181,7 +181,11 @@ func (c *Client) applyPrefix(path string) string {
 // do executes an HTTP request and decodes the JSON response.
 // For 204 responses, result should be nil.
 func (c *Client) do(ctx context.Context, method, path string, body any, result any) error {
-	return c.doProject(ctx, method, path, "", body, result)
+	return c.doProjectWithHeaders(ctx, method, path, "", body, result, nil)
+}
+
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, body any, result any, headers http.Header) error {
+	return c.doProjectWithHeaders(ctx, method, path, "", body, result, headers)
 }
 
 // resolveProjectID maps a project slug or id to the project id via
@@ -252,6 +256,10 @@ func (c *Client) resolveConnectionsBase(ctx context.Context) (base string, envel
 // requests — and the legacy ?projectId= query is kept alongside for old
 // /api servers. An empty project means "the API key's own project".
 func (c *Client) doProject(ctx context.Context, method, path, project string, body any, result any) error {
+	return c.doProjectWithHeaders(ctx, method, path, project, body, result, nil)
+}
+
+func (c *Client) doProjectWithHeaders(ctx context.Context, method, path, project string, body any, result any, headers http.Header) error {
 	c.resolvePrefix(ctx)
 	var projectHeader string
 	if project != "" {
@@ -281,6 +289,11 @@ func (c *Client) doProject(ctx context.Context, method, path, project string, bo
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
 	}
 
 	resp, err := c.httpClient.Do(req)
