@@ -20,11 +20,13 @@ import (
 
 // Client is the HTTP client for the OneCLI API.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
-	prefix     string    // resolved API prefix: "/v1" or "/api"
-	prefixOnce sync.Once // ensures prefix detection runs once
+	baseURL        string
+	apiKey         string
+	defaultHeaders http.Header
+	runOnly        bool
+	httpClient     *http.Client
+	prefix         string    // resolved API prefix: "/v1" or "/api"
+	prefixOnce     sync.Once // ensures prefix detection runs once
 
 	// Project slug/id → resolved project id, cached per process. /v1 servers
 	// scope requests via the X-Project-Id header (ids, not slugs); the legacy
@@ -43,6 +45,19 @@ func New(baseURL, apiKey string) *Client {
 		baseURL:    baseURL,
 		apiKey:     apiKey,
 		httpClient: buildHTTPClient(),
+	}
+}
+
+// NewPaperclipRun creates a capability-only client for a Paperclip-bound run.
+// It intentionally has no management API key; the server-minted run context is
+// the complete authentication material for this client.
+func NewPaperclipRun(baseURL string, headers http.Header) *Client {
+	return &Client{
+		baseURL:        baseURL,
+		defaultHeaders: headers.Clone(),
+		runOnly:        true,
+		httpClient:     buildHTTPClient(),
+		prefix:         "/v1",
 	}
 }
 
@@ -160,6 +175,7 @@ func (c *Client) resolvePrefix(ctx context.Context) {
 		if c.apiKey != "" {
 			req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		}
+		addHeaders(req.Header, c.defaultHeaders)
 		resp, err := c.httpClient.Do(req)
 		if resp != nil {
 			resp.Body.Close()
@@ -181,7 +197,11 @@ func (c *Client) applyPrefix(path string) string {
 // do executes an HTTP request and decodes the JSON response.
 // For 204 responses, result should be nil.
 func (c *Client) do(ctx context.Context, method, path string, body any, result any) error {
-	return c.doProject(ctx, method, path, "", body, result)
+	return c.doProjectWithHeaders(ctx, method, path, "", body, result, nil)
+}
+
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, body any, result any, headers http.Header) error {
+	return c.doProjectWithHeaders(ctx, method, path, "", body, result, headers)
 }
 
 // resolveProjectID maps a project slug or id to the project id via
@@ -252,6 +272,13 @@ func (c *Client) resolveConnectionsBase(ctx context.Context) (base string, envel
 // requests — and the legacy ?projectId= query is kept alongside for old
 // /api servers. An empty project means "the API key's own project".
 func (c *Client) doProject(ctx context.Context, method, path, project string, body any, result any) error {
+	return c.doProjectWithHeaders(ctx, method, path, project, body, result, nil)
+}
+
+func (c *Client) doProjectWithHeaders(ctx context.Context, method, path, project string, body any, result any, headers http.Header) error {
+	if c.runOnly && path != "/v1/container-config" && !strings.HasPrefix(path, "/v1/container-config?") {
+		return fmt.Errorf("Paperclip run capability cannot access management endpoint %s", path)
+	}
 	c.resolvePrefix(ctx)
 	var projectHeader string
 	if project != "" {
@@ -282,6 +309,8 @@ func (c *Client) doProject(ctx context.Context, method, path, project string, bo
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	addHeaders(req.Header, c.defaultHeaders)
+	addHeaders(req.Header, headers)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -308,4 +337,12 @@ func (c *Client) doProject(ctx context.Context, method, path, project string, bo
 		}
 	}
 	return nil
+}
+
+func addHeaders(dst, src http.Header) {
+	for name, values := range src {
+		for _, value := range values {
+			dst.Add(name, value)
+		}
+	}
 }

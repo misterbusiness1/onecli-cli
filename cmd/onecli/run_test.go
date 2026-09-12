@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,113 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestRunCmdTransportsPaperclipContextToContainerConfig(t *testing.T) {
+	badHome := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(badHome, []byte("stored credentials must not be read"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", badHome)
+	t.Setenv("ONECLI_API_KEY", "stored-management-key-must-not-be-sent")
+	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "binding-proof")
+	t.Setenv("PAPERCLIP_RUN_ID", "run-proof")
+	t.Setenv("PAPERCLIP_AGENT_ID", "agent-proof")
+	t.Setenv("PAPERCLIP_COMPANY_ID", "company-proof")
+
+	var requests []http.Header
+	var requestPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Header.Clone())
+		requestPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"env":{},"caCertificate":"","caCertificateContainerPath":""}`))
+	}))
+	defer srv.Close()
+	t.Setenv("ONECLI_API_HOST", srv.URL)
+
+	var stdout bytes.Buffer
+	out := output.NewWithWriters(&stdout, &stdout)
+	cmd := RunCmd{Agent: "occ-plugin-engineer", NoCA: true, DryRun: true, Args: []string{"true"}}
+	if err := cmd.Run(out); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want one container-config request", len(requests))
+	}
+	if requestPath != "/v1/container-config" {
+		t.Fatalf("request path = %q, want /v1/container-config", requestPath)
+	}
+
+	want := map[string]string{
+		"X-Paperclip-OneCLI-Run-Binding": "binding-proof",
+		"X-Paperclip-Run-Id":             "run-proof",
+		"X-Paperclip-Agent-Id":           "agent-proof",
+		"X-Paperclip-Company-Id":         "company-proof",
+	}
+	for name, value := range want {
+		for i, got := range requests {
+			if got.Get(name) != value {
+				t.Errorf("request %d: %s = %q, want %q", i, name, got.Get(name), value)
+			}
+		}
+	}
+	for i, got := range requests {
+		if got.Get("Authorization") != "" {
+			t.Errorf("request %d sent management Authorization header", i)
+		}
+	}
+}
+
+func TestRunCmdRejectsPartialPaperclipContextBeforeNetwork(t *testing.T) {
+	for _, name := range []string{"PAPERCLIP_ONECLI_RUNTIME_BINDING", "PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("PAPERCLIP_RUN_ID", "partial")
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+	}))
+	defer srv.Close()
+	t.Setenv("ONECLI_API_HOST", srv.URL)
+
+	var stdout bytes.Buffer
+	err := (&RunCmd{NoCA: true, DryRun: true, Args: []string{"true"}}).Run(output.NewWithWriters(&stdout, &stdout))
+	if err == nil || !strings.Contains(err.Error(), "incomplete Paperclip run context") {
+		t.Fatalf("error = %v, want incomplete context", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want zero", requests)
+	}
+}
+
+func TestRunCmdOperatorModeRetainsStoredKeyAuthentication(t *testing.T) {
+	for _, name := range []string{"PAPERCLIP_ONECLI_RUNTIME_BINDING", "PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("ONECLI_API_KEY", "operator-key")
+	var authorizations []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"env":{},"caCertificate":"","caCertificateContainerPath":""}`))
+	}))
+	defer srv.Close()
+	t.Setenv("ONECLI_API_HOST", srv.URL)
+
+	var stdout bytes.Buffer
+	cmd := RunCmd{Agent: "operator-agent", NoCA: true, DryRun: true, Args: []string{"true"}}
+	if err := cmd.Run(output.NewWithWriters(&stdout, &stdout)); err != nil {
+		t.Fatal(err)
+	}
+	if len(authorizations) != 2 {
+		t.Fatalf("requests = %d, want health probe plus container config", len(authorizations))
+	}
+	for i, got := range authorizations {
+		if got != "Bearer operator-key" {
+			t.Errorf("request %d Authorization = %q", i, got)
+		}
+	}
+}
 
 func TestFindProxyURL(t *testing.T) {
 	tests := []struct {
