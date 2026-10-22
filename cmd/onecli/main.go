@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -167,6 +168,14 @@ func newRunClient() (*api.Client, error) {
 	headers, bound, err := api.PaperclipRunHeadersFromEnv()
 	if err != nil {
 		return nil, err
+	}
+	// Agent capability and run context are complementary. Validate complete
+	// context first, then retain it when authenticating with an assigned token.
+	if token, supplied := os.LookupEnv("ONECLI_AGENT_TOKEN"); supplied {
+		if !regexp.MustCompile(`^aoc_[a-f0-9]{64}$`).MatchString(token) {
+			return nil, fmt.Errorf("invalid ONECLI_AGENT_TOKEN")
+		}
+		return api.NewAgentRun(config.APIHost(), token, headers), nil
 	}
 	if bound {
 		return api.NewPaperclipRun(config.APIHost(), headers), nil

@@ -61,6 +61,14 @@ func NewPaperclipRun(baseURL string, headers http.Header) *Client {
 	}
 }
 
+// NewAgentRun retains the restricted run-only transport and optional complete
+// Paperclip context while authenticating with an assigned agent capability.
+func NewAgentRun(baseURL, token string, headers http.Header) *Client {
+	client := NewPaperclipRun(baseURL, headers)
+	client.apiKey = token
+	return client
+}
+
 // newWithPrefix creates a client with a pre-set prefix (for testing).
 func newWithPrefix(baseURL, apiKey, prefix string) *Client {
 	return &Client{

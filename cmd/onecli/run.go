@@ -363,6 +363,13 @@ func buildChildEnv(current []string, serverEnv map[string]string, caPath string)
 		stripKeys[k] = struct{}{}
 	}
 
+	agentScoped := slices.ContainsFunc(current, func(entry string) bool {
+		return strings.HasPrefix(entry, "ONECLI_AGENT_TOKEN=")
+	})
+	if agentScoped {
+		stripKeys["ONECLI_API_KEY"] = struct{}{}
+	}
+
 	out := make([]string, 0, len(current)+len(serverEnv)+6)
 	for _, kv := range current {
 		i := strings.IndexByte(kv, '=')
@@ -389,6 +396,9 @@ func buildChildEnv(current []string, serverEnv map[string]string, caPath string)
 	// Append server-provided env (HTTPS_PROXY, credentials, etc.),
 	// excluding any CA trust keys we'll override with local paths.
 	for k, v := range serverEnv {
+		if agentScoped && k == "ONECLI_API_KEY" {
+			continue
+		}
 		if _, skip := localCAKeys[k]; skip {
 			continue
 		}
