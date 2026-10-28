@@ -100,6 +100,9 @@ func TestRunCmdRejectsPartialPaperclipContextBeforeNetwork(t *testing.T) {
 func TestRunCmdOperatorModeRetainsStoredKeyAuthentication(t *testing.T) {
 	for _, name := range []string{"PAPERCLIP_ONECLI_RUNTIME_BINDING", "PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
 		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("ONECLI_API_KEY", "operator-key")
 	var authorizations []string

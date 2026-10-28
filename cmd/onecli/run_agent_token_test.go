@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -118,5 +119,93 @@ func TestAgentTokenPreservesPaperclipContextAndRejectsPartialContext(t *testing.
 	t.Setenv("PAPERCLIP_AGENT_ID", "")
 	if _, err = newRunClient(); err == nil {
 		t.Fatal("token must not bypass partial run-context rejection")
+	}
+}
+
+// Paperclip's normal model adapters provide these three metadata values without
+// minting a separate OneCLI runtime-binding capability.
+func TestAssignedAgentAcceptsOrdinaryPaperclipMetadata(t *testing.T) {
+	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "")
+	if err := os.Unsetenv("PAPERCLIP_ONECLI_RUNTIME_BINDING"); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"PAPERCLIP_RUN_ID": "run-fixture", "PAPERCLIP_AGENT_ID": "agent-fixture", "PAPERCLIP_COMPANY_ID": "company-fixture"} {
+		t.Setenv(name, value)
+	}
+	token := "aoc_" + strings.Repeat("3", 64)
+	t.Setenv("ONECLI_AGENT_TOKEN", token)
+	t.Setenv("ONECLI_API_KEY", "oc_management_must_not_be_used")
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			t.Error("assigned token was not selected")
+		}
+		if r.Header.Get("X-Paperclip-OneCLI-Run-Binding") != "" {
+			t.Error("runtime binding was fabricated")
+		}
+		if r.URL.Path != "/v1/container-config" {
+			t.Error("unexpected management request")
+		}
+		fmt.Fprint(w, `{"env":{},"caCertificate":"","caCertificateContainerPath":""}`)
+	}))
+	defer server.Close()
+	t.Setenv("ONECLI_API_HOST", server.URL)
+	client, err := newRunClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.GetContainerConfig(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.ListAgents(context.Background(), ""); err == nil {
+		t.Fatal("agent client must refuse management")
+	}
+	if calls != 1 {
+		t.Fatalf("requests=%d want1", calls)
+	}
+}
+func TestAssignedAgentExplicitEmptyRuntimeBindingFailsClosed(t *testing.T) {
+	t.Setenv("ONECLI_AGENT_TOKEN", "aoc_"+strings.Repeat("4", 64))
+	for _, name := range []string{"PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
+		t.Setenv(name, "")
+	}
+	for _, value := range []string{"", "   "} {
+		t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", value)
+		if _, err := newRunClient(); err == nil {
+			t.Fatal("explicit empty runtime binding must fail closed")
+		}
+	}
+}
+func TestOrdinaryPaperclipMetadataWithoutAssignedTokenCannotUseAdmin(t *testing.T) {
+	t.Setenv("ONECLI_AGENT_TOKEN", "")
+	if err := os.Unsetenv("ONECLI_AGENT_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "")
+	if err := os.Unsetenv("PAPERCLIP_ONECLI_RUNTIME_BINDING"); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"PAPERCLIP_RUN_ID": "run-fixture", "PAPERCLIP_AGENT_ID": "agent-fixture", "PAPERCLIP_COMPANY_ID": "company-fixture"} {
+		t.Setenv(name, value)
+	}
+	t.Setenv("ONECLI_API_KEY", "oc_management_must_not_be_used")
+	if _, err := newRunClient(); err == nil {
+		t.Fatal("missing assigned token must not fall back to admin")
+	}
+}
+
+func TestExplicitEmptyRuntimeBindingCannotUseOperatorFallback(t *testing.T) {
+	t.Setenv("ONECLI_AGENT_TOKEN", "")
+	if err := os.Unsetenv("ONECLI_AGENT_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "")
+	t.Setenv("ONECLI_API_KEY", "oc_management_must_not_be_used")
+	if _, err := newRunClient(); err == nil {
+		t.Fatal("explicit empty binding must not select operator credentials")
 	}
 }
